@@ -1,0 +1,75 @@
+# Ultimate Group Asset Tracker — LOCAL TESTING stack (builds images from this folder).
+#   docker compose up -d --build      then open http://localhost:30080
+# For TrueNAS use truenas-app.yaml, which pulls the published images from GHCR instead.
+#
+#   web       nginx + the app; passes /rest/v1/ to the API          -> :30080
+#   api       PostgREST: turns the ug_* database functions into a web API (internal only)
+#   migrate   applies db/*.sql on every start, then exits
+#   db        PostgreSQL 17, data kept in ./pgdata
+#   adminer   database viewer for IT (LAN only, never route through Cloudflare) -> :30081
+
+services:
+  db:
+    image: postgres:17.2-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ugtracker
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: localdevpassword
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ugtracker"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/migrate.Dockerfile
+    image: ug-asset-tracker-migrate:local
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: postgres
+      PGDATABASE: ugtracker
+      PGPASSWORD: localdevpassword
+      AUTHENTICATOR_PASSWORD: localapipassword
+      INITIAL_ADMIN_PIN: "4321"
+
+  api:
+    image: postgrest/postgrest:v12.2.3
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PGRST_DB_URI: postgres://authenticator:localapipassword@db:5432/ugtracker
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_OPENAPI_MODE: disabled
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    image: ug-asset-tracker-web:local
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "30080:80"
+
+  adminer:
+    image: adminer:4.8.1
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    ports:
+      - "30081:8080"

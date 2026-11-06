@@ -1,0 +1,76 @@
+# Ultimate Group Asset Tracker — TrueNAS SCALE custom app.
+# Paste into TrueNAS → Apps → Discover Apps → ⋮ → Install via YAML (app name: ug-asset-tracker).
+#
+# BEFORE PASTING:
+#   * Replace every CHANGE_ME value (letters and numbers only).
+#       CHANGE_ME_postgres_password appears 3 times, CHANGE_ME_api_password 2 times; keep each set identical.
+#   * Set INITIAL_ADMIN_PIN (Russell Ralph's first PIN).
+#   * Change /mnt/tank/apps/ug-asset-tracker/pgdata if your dataset path is different.
+#
+# UPDATING: push changes to GitHub → GitHub Actions publishes new images → in TrueNAS, open the app
+# and click Update/Redeploy (or Edit → Save). pull_policy: always fetches the newest images.
+
+x-db-env: &db-env
+  PGHOST: db
+  PGUSER: postgres
+  PGDATABASE: ugtracker
+  PGPASSWORD: CHANGE_ME_postgres_password
+
+services:
+  db:
+    image: postgres:17.2-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ugtracker
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: CHANGE_ME_postgres_password
+    volumes:
+      - /mnt/tank/apps/ug-asset-tracker/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ugtracker"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    image: ghcr.io/cunningsquirrel/ug-asset-tracker-migrate:latest
+    pull_policy: always
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *db-env
+      AUTHENTICATOR_PASSWORD: CHANGE_ME_api_password
+      INITIAL_ADMIN_PIN: "CHANGE_ME_4_digits"
+
+  api:
+    image: postgrest/postgrest:v12.2.3
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PGRST_DB_URI: postgres://authenticator:CHANGE_ME_api_password@db:5432/ugtracker
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_OPENAPI_MODE: disabled
+
+  web:
+    image: ghcr.io/cunningsquirrel/ug-asset-tracker-web:latest
+    pull_policy: always
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "30080:80"
+
+  adminer:
+    image: adminer:4.8.1
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    ports:
+      - "30081:8080"

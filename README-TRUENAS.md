@@ -1,0 +1,129 @@
+# Ultimate Group Asset & Fleet Tracker — TrueNAS SCALE Deployment Guide
+
+Self-hosted version: the app and its database both run on our TrueNAS server.
+Supabase and Netlify are no longer used.
+
+## How it fits together
+
+```text
+Staff phone / PC ──HTTPS──► Cloudflare ──► TrueNAS :30080  web (nginx)
+                                                 ├─ /           → the app (html/index.html)
+                                                 └─ /rest/v1/   → api (PostgREST) → db (PostgreSQL)
+IT only (office LAN) ─────────────────────► TrueNAS :30081  Adminer (database viewer)
+```
+
+- **Day-to-day management happens inside the app.** Add or remove assets in **Inventory**, and manage staff, roles and PINs in **Master Control**. Nobody needs a database tool.
+- PINs are stored hashed in the database and checked by the server. The browser never sees them.
+- 5 wrong PINs locks that person's account for 15 minutes. Sessions last 12 hours.
+
+## Where the code lives
+
+The code lives in the private GitHub repo **CunningSquirrel/ug-asset-tracker**. Every push to `main` makes GitHub Actions build two images and publish them to GitHub Container Registry:
+
+- `ghcr.io/cunningsquirrel/ug-asset-tracker-web`: nginx + the app
+- `ghcr.io/cunningsquirrel/ug-asset-tracker-migrate`: the database setup scripts
+
+TrueNAS just pulls those images, so there are no files to copy to the server. The only thing stored on TrueNAS is the database (`pgdata`).
+
+```text
+ug-asset-tracker/
+├── .github/workflows/publish-images.yml  # Builds & publishes images on push to main
+├── truenas-app.yaml     # Paste into TrueNAS "Install via YAML"
+├── docker-compose.yml   # Local testing: docker compose up -d --build → http://localhost:30080
+├── docker/              # web.Dockerfile, migrate.Dockerfile
+├── nginx.conf           # Web server: serves the app, forwards /rest/v1/ to the API
+├── db/
+│   ├── migrate.sh       # Runs the three scripts below on every start
+│   ├── 01-roles.sql     # Database roles the API uses
+│   ├── 02-schema.sql    # Tables + secure functions (re-applied on every start, safe)
+│   └── 03-seed.sql      # First-run staff roster (only when the staff table is empty)
+└── html/
+    └── index.html       # The app
+```
+
+---
+
+## Step 1: Create a dataset for the database
+
+1. TrueNAS → **Datasets** → select your pool → **Add Dataset**.
+2. Name: `ug-asset-tracker` (e.g. under `tank/apps`). Choose the **Apps** dataset preset.
+3. The database will live in `/mnt/tank/apps/ug-asset-tracker/pgdata`. Postgres creates that folder on first start.
+
+## Step 2: Let TrueNAS pull the private images
+
+The images are private, so TrueNAS needs a read-only GitHub token:
+1. GitHub → **Settings → Developer settings → Personal access tokens → Tokens (classic)** → Generate. Tick only **read:packages** and set an expiry you'll remember to renew.
+2. TrueNAS → **Apps** → **Configuration** → **Manage Container Image Registries** (wording varies by version) → Add: URI `ghcr.io`, username `CunningSquirrel`, password = the token.
+   - If your TrueNAS version has no registry option, you can make the two packages public in GitHub → Packages → package settings. Note that this makes the app's code, including the staff name list, publicly downloadable.
+
+## Step 3: Edit the YAML
+
+Open `truenas-app.yaml` and change:
+
+| Setting | What to put |
+|---|---|
+| `CHANGE_ME_postgres_password` (appears **3 times**, keep them identical) | A long random password, letters and numbers only |
+| `CHANGE_ME_api_password` (appears **2 times**, keep them identical) | A different long random password, letters and numbers only |
+| `INITIAL_ADMIN_PIN` | The 4-digit PIN Russell Ralph (Master Admin) will use on first sign-in |
+| `/mnt/tank/apps/ug-asset-tracker/pgdata` | Your real dataset path, if different |
+
+Store both passwords in the company password manager. **Don't commit the edited copy to GitHub.**
+
+## Step 4: Install
+
+1. TrueNAS → **Apps** → **Discover Apps** → top-right **⋮** → **Install via YAML**.
+2. Name: `ug-asset-tracker`. Paste the edited YAML and click **Save**.
+3. Wait until the app shows **Running**. The `migrate` container will show as **Exited**; that's normal, because it sets up the database and then stops.
+4. Open `http://10.0.0.5:30080` on the office network.
+
+## Step 5: First sign-in (Master Admin)
+
+1. Sign in as **Russell Ralph** with the `INITIAL_ADMIN_PIN`.
+2. Go to **Master Control** and **give every staff member their own PIN**. Everyone else starts on `1234`, so the app must not go public until this is done.
+3. Remove anyone who shouldn't have access, and add any missing staff.
+4. Go to **Inventory** and add or remove assets as needed. The app starts with a few sample assets.
+
+## Step 6: Put it on the company domain (Cloudflare)
+
+Recommended: **Cloudflare Tunnel**, which needs no router port forwarding and gives automatic HTTPS.
+1. In the Cloudflare dashboard: **Zero Trust → Networks → Tunnels → Create tunnel** (cloudflared). Copy the token.
+2. On TrueNAS, install the **Cloudflared** app from Discover Apps and paste the token.
+3. Add a public hostname in the tunnel, e.g. `tools.yourdomain.co.za` → service `http://10.0.0.5:30080`.
+4. **Only route port 30080.** Never publish 30081 (Adminer).
+5. Optional extra layer: **Zero Trust → Access → Applications** can require staff to confirm their work email before the page loads.
+
+---
+
+## Updating the app later
+
+1. Make changes in the repo. Test locally with `docker compose up -d --build` → http://localhost:30080.
+2. Commit and push to `main`. In GitHub → **Actions**, wait for **Publish images** to go green (about 2–4 minutes).
+3. TrueNAS → **Apps** → `ug-asset-tracker` → **Update** if offered. Otherwise **Edit** → **Save**, which redeploys. `pull_policy: always` makes it fetch the newest `web` and `migrate` images, and `migrate` applies any database changes without touching data.
+
+**Rolling back:** every build is also tagged with its commit id. In the YAML, change `:latest` to `:<commit-sha>` from a known-good build and save.
+
+## Backups
+
+- Add a **Periodic Snapshot Task** for the `ug-asset-tracker` dataset (e.g. hourly, keep 2 weeks), and include it in your normal replication/off-site backup.
+- For a portable copy, open Adminer → **Export** → SQL.
+
+## Adminer (IT only)
+
+`http://10.0.0.5:30081`: System **PostgreSQL**, Server `db`, Username `postgres`, the postgres password, Database `ugtracker`.
+Use it for imports, exports and fixes. Editing data here skips the app's checks, so prefer the app for normal changes.
+
+## Moving data across from the old Supabase version
+
+1. In Supabase → **Table Editor**, export `tools` and `activity_logs` as CSV. Don't import staff PINs; set new ones in the app instead.
+2. In Adminer → select the table → **Import** → choose the CSV.
+3. Skip any row with id `__UG_STAFF_CONFIG__`: it contains old plain-text PINs.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Install fails pulling `ghcr.io/...` images | The registry login from Step 2 is missing or the token expired. |
+| App loads but sign-in says "Cannot reach the server" | Check the `api` container is running. Check that the `CHANGE_ME_api_password` values match. |
+| `migrate` keeps failing | Look at its logs in TrueNAS. Usually the postgres password doesn't match in all 3 places, or `INITIAL_ADMIN_PIN` isn't 4 digits. |
+| `db` won't start, permission error on `pgdata` | Create the dataset with the **Apps** preset, or let TrueNAS set the ACL for the apps user. |
+| Old phones show stale data | They may have the old Netlify version cached. Open the new address and sign in again. |

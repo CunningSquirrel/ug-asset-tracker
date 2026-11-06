@@ -1,0 +1,5 @@
+pgdata/
+*.bak
+.DS_Store
+New Text Document.txt
+.env
