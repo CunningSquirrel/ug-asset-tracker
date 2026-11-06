@@ -2803,16 +2803,18 @@ NOTIFY pgrst, 'reload schema';</pre>
       return false;
     }
 
+    // Returns { ok, forbidden }
     async function deleteToolFromSupabase(toolId) {
-      if (!getSupabaseCreds().enabled || !sessionToken) return false;
+      if (!getSupabaseCreds().enabled || !sessionToken) return { ok: false, forbidden: false };
       const res = await ugRpc('ug_delete_tool', { p_token: sessionToken, p_id: toolId });
       if (res.ok) {
         logToSyncConsole(`Deleted asset ${toolId} from public.tools`, "success");
-        return true;
+        return { ok: true, forbidden: false };
       }
-      if (String(res.error).includes('UG_FORBIDDEN')) showToast("You don't have permission to delete assets", "error");
+      const forbidden = String(res.error).includes('UG_FORBIDDEN');
+      if (forbidden) showToast("You don't have permission to delete assets", "error");
       logToSyncConsole(`ERROR: Could not delete ${toolId}: ${res.error}`, "error");
-      return false;
+      return { ok: false, forbidden };
     }
 
     // newPin: only sent when an admin is setting a PIN for a single account. PINs are hashed by the server.
@@ -2917,9 +2919,20 @@ NOTIFY pgrst, 'reload schema';</pre>
           const upperId = mapped.id.toUpperCase();
 
           // Never re-import an asset or vehicle that was explicitly deleted locally
-          if (deletedAssetTimestamps[upperId]) {
-            deleteToolFromSupabase(mapped.id);
-            return;
+          const tomb = deletedAssetTimestamps[upperId];
+          if (tomb) {
+            const t = (typeof tomb === 'object') ? tomb : { at: Number(tomb) || 0, pending: false };
+            if (t.pending) {
+              // Deleted on this device but the server never confirmed it: retry the delete
+              deleteToolFromSupabase(mapped.id).then(r => {
+                if (r.ok) deletedAssetTimestamps[upperId] = { at: Date.now(), pending: false };
+                else if (r.forbidden) delete deletedAssetTimestamps[upperId];
+              });
+              return;
+            }
+            if (Date.now() - t.at < 120000) return; // just deleted here; ignore an in-flight stale copy
+            // The server has this ID again (re-added or imported since): accept it, never re-delete
+            delete deletedAssetTimestamps[upperId];
           }
 
           const localIdx = tools.findIndex(t => t.id.toUpperCase() === upperId);
@@ -2942,6 +2955,19 @@ NOTIFY pgrst, 'reload schema';</pre>
           } else {
             tools.push(mapped);
           }
+        });
+
+        // Drop local assets the server no longer has (deleted elsewhere), unless this device
+        // created/changed them in the last 5 minutes and they are still on their way up.
+        const serverIds = new Set(realToolRows.map(r => String(r.id).toUpperCase()));
+        tools = tools.filter(t => {
+          if (serverIds.has(t.id.toUpperCase())) return true;
+          const lockTime = localToolLockTimestamps[t.id] || 0;
+          if (Date.now() - lockTime < 300000) {
+            toolsToRePush.push(t);
+            return true;
+          }
+          return false;
         });
 
         if (toolsToRePush.length > 0) {
@@ -3468,8 +3494,9 @@ NOTIFY pgrst, 'reload schema';</pre>
       renderFleetAndMileageView();
       renderMyCheckedOutTools();
 
-      // Push all currently modified/checked-out tools to Supabase so multiple sign-outs stay in sync
-      upsertToolsToSupabase(tools);
+      // Push only the asset that changed. Pushing the whole local list could resurrect assets
+      // that were deleted on another device since this one last synced.
+      upsertToolsToSupabase([tools[targetIndex]]);
       pushActivityLogToSupabase(logEntry);
 
       const jobInput = document.getElementById('checkout-job');
@@ -3947,8 +3974,11 @@ NOTIFY pgrst, 'reload schema';</pre>
       const removed = tools[idx];
       const isVehicle = removed.category === 'Fleet / Vehicle';
 
-      // Record deletion timestamp & lock so Supabase polling and default vehicle seeding never restore it
-      deletedAssetTimestamps[upperId] = Date.now();
+      // Remember this deletion. "pending" = not yet confirmed by the server (retried on next sync).
+      // Once confirmed, the server is the only source of truth: if the same ID is added again later
+      // (e.g. by an import or another device), this device accepts it instead of deleting it again.
+      const cloud = getSupabaseCreds().enabled;
+      deletedAssetTimestamps[upperId] = { at: Date.now(), pending: cloud };
       localToolLockTimestamps[removed.id] = Date.now();
 
       tools.splice(idx, 1);
@@ -3957,7 +3987,27 @@ NOTIFY pgrst, 'reload schema';</pre>
       renderCheckoutsList();
       renderFleetAndMileageView();
       closeDeleteToolModal();
-      await deleteToolFromSupabase(removed.id);
+
+      if (cloud) {
+        const res = await deleteToolFromSupabase(removed.id);
+        if (res.forbidden) {
+          // Server refused: put the asset back so this screen matches the server
+          delete deletedAssetTimestamps[upperId];
+          tools.splice(Math.min(idx, tools.length), 0, removed);
+          persistState();
+          renderInventoryTable();
+          renderCheckoutsList();
+          renderFleetAndMileageView();
+          return;
+        }
+        if (res.ok) {
+          deletedAssetTimestamps[upperId] = { at: Date.now(), pending: false };
+          persistState();
+        } else {
+          showToast(`Removed ${removed.id} here. The server will be updated when the connection is back.`, "error");
+          return;
+        }
+      }
       showToast(`Removed ${isVehicle ? 'Vehicle' : 'Asset'} ${removed.id} (${removed.name})`);
     }
 
@@ -4036,6 +4086,7 @@ NOTIFY pgrst, 'reload schema';</pre>
       };
 
       tools.unshift(newTool);
+      localToolLockTimestamps[newTool.id] = Date.now();
       persistState();
       renderInventoryTable();
       renderFleetAndMileageView();
@@ -4099,6 +4150,7 @@ NOTIFY pgrst, 'reload schema';</pre>
       reader.onload = function(e) {
         const lines = e.target.result.split(/\r?\n/).filter(l => l.trim());
         let added = 0;
+        const imported = [];
         for (let i = 1; i < lines.length; i++) {
           const cols = lines[i].split(',').map(c => c.replace(/^"|"$/g, '').trim());
           if (cols[0] && cols[1]) {
@@ -4118,12 +4170,15 @@ NOTIFY pgrst, 'reload schema';</pre>
             };
             if (existingIdx >= 0) tools[existingIdx] = item;
             else tools.push(item);
+            delete deletedAssetTimestamps[item.id];
+            localToolLockTimestamps[item.id] = Date.now();
+            imported.push(item);
             added++;
           }
         }
         persistState();
         renderInventoryTable();
-        upsertToolsToSupabase(tools);
+        if (imported.length) upsertToolsToSupabase(imported);
         showToast(`Imported ${added} assets from CSV`);
       };
       reader.readAsText(file);
