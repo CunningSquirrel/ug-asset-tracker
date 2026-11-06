@@ -18,7 +18,7 @@ IT only (office LAN) ───────────────────�
 
 ## Where the code lives
 
-The code lives in the private GitHub repo **CunningSquirrel/ug-asset-tracker**. Every push to `main` makes GitHub Actions build two images and publish them to GitHub Container Registry:
+The code lives in the private GitHub repo **CunningSquirrel/ug-asset-tracker**. Every push to `main` makes GitHub Actions build two images and publish them (publicly) to GitHub Container Registry:
 
 - `ghcr.io/cunningsquirrel/ug-asset-tracker-web`: nginx + the app
 - `ghcr.io/cunningsquirrel/ug-asset-tracker-migrate`: the database setup scripts
@@ -49,12 +49,11 @@ ug-asset-tracker/
 2. Name: `ug-asset-tracker` (e.g. under `tank/apps`). Choose the **Apps** dataset preset.
 3. The database will live in `/mnt/tank/apps/ug-asset-tracker/pgdata`. Postgres creates that folder on first start.
 
-## Step 2: Let TrueNAS pull the private images
+## Step 2: Image access
 
-The images are private, so TrueNAS needs a read-only GitHub token:
-1. GitHub → **Settings → Developer settings → Personal access tokens → Tokens (classic)** → Generate. Tick only **read:packages** and set an expiry you'll remember to renew.
-2. TrueNAS → **Apps** → **Configuration** → **Manage Container Image Registries** (wording varies by version) → Add: URI `ghcr.io`, username `CunningSquirrel`, password = the token.
-   - If your TrueNAS version has no registry option, you can make the two packages public in GitHub → Packages → package settings. Note that this makes the app's code, including the staff name list, publicly downloadable.
+The two images on GitHub Container Registry are **public**, so TrueNAS pulls them without a login. The source repo stays private. Note that anyone can download the images, including the default staff name list.
+
+If they are ever made private again, add a registry login in TrueNAS → **Apps** → **Configuration** → **Manage Container Image Registries**: URI `ghcr.io`, username `CunningSquirrel`, password a GitHub token with only `read:packages`.
 
 ## Step 3: Edit the YAML
 
@@ -122,7 +121,7 @@ Use it for imports, exports and fixes. Editing data here skips the app's checks,
 
 | Symptom | Fix |
 |---|---|
-| Install fails pulling `ghcr.io/...` images | The registry login from Step 2 is missing or the token expired. |
+| Install fails pulling `ghcr.io/...` images | Check both packages are still public on GitHub (or add a registry login, see Step 2). |
 | App loads but sign-in says "Cannot reach the server" | Check the `api` container is running. Check that the `CHANGE_ME_api_password` values match. |
 | `migrate` keeps failing | Look at its logs in TrueNAS. Usually the postgres password doesn't match in all 3 places, or `INITIAL_ADMIN_PIN` isn't 4 digits. |
 | `db` won't start, permission error on `pgdata` | Create the dataset with the **Apps** preset, or let TrueNAS set the ACL for the apps user. |

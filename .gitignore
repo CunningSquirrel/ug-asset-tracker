@@ -3,3 +3,5 @@ pgdata/
 .DS_Store
 New Text Document.txt
 .env
+*.local.txt
+*.local.yaml
