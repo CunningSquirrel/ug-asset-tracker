@@ -44,6 +44,7 @@ The app looks and works the same for staff: same screens, scanner, check-out/ret
 - On the **Go-Live tab**, the Supabase URL/key boxes and the "Download Team HTML / index.html" buttons are hidden. A panel says it's connected to the in-house database instead.
   *Code:* `applySelfHostedUI()`
 - Labels like "Supabase Cloud Connected" now read "In-house Database Connected".
+- *(9 Nov 2026)* The **"Complete Supabase SQL Setup Script"** box on the Go-Live tab (and its Copy button, `copySqlSchema()`) was removed. Our own server sets up its database automatically (`db/02-schema.sql`), so the box was no longer needed.
 - **Local-only mode still works:** if you open the HTML file directly from disk (double-click), it behaves like the original, with data saved only in that browser. This is handy for playing around without a server.
 
 ## 2–5. Security: sign-in, PINs and permissions
