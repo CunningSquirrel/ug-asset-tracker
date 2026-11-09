@@ -151,6 +151,7 @@ Passwords and the first Master Admin PIN for each server are kept outside this p
 | `truenas-app.yaml` | Template to install on TrueNAS (passwords are `CHANGE_ME` placeholders) |
 | `README-TRUENAS.md` | Step-by-step server install, updates, backups, Cloudflare |
 | `CHANGES.md` | This file |
+| `HANDOVER.md` | Checklist for taking over the app from Kyle (GitHub, TrueNAS, Cloudflare, passwords) |
 | `original/` | (export only) your original HTML, for comparison |
 
 ## How to play around with it

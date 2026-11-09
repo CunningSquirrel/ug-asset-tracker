@@ -3,7 +3,7 @@
 Self-hosted version: the app and its database both run on our TrueNAS server.
 Supabase and Netlify are no longer used.
 
-> **Current install:** TrueNAS **10.0.0.11** → app on port **30090**, Adminer on **30091** (30080 is taken by `haos-monitoring` there). The examples below use the template's default ports 30080/30081 and `10.0.0.5`; substitute as needed. What changed from the original Netlify version, and why, is in **CHANGES.md**.
+> **Current install:** TrueNAS **10.0.0.11** → app on port **30090**, Adminer on **30091** (30080 is taken by `haos-monitoring` there). The examples below use the template's default ports 30080/30081 and `10.0.0.5`; substitute as needed. What changed from the original Netlify version, and why, is in **CHANGES.md**. Handing the app to a new owner: **HANDOVER.md**.
 
 ## How it fits together
 
