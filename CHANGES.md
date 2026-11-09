@@ -96,6 +96,13 @@ That was acceptable while it was a test on Netlify. It isn't once it's on a publ
 
 **First run:** the staff roster is created by the database (`db/03-seed.sql`), not by the browser. Russell Ralph gets a PIN chosen at install time, and **everyone else starts on 1234 and must be given their own PIN in Master Control before the app goes public.**
 
+### PINs and updates (9 Nov 2026)
+
+**Updates and redeploys never change anyone's PIN.** A PIN set in Master Control stays until someone changes it in Master Control again. This was tested: upgrade, redeploy and restart all keep every staff member's PIN.
+- `INITIAL_ADMIN_PIN` in the TrueNAS YAML is used **once only**, when the database is brand new and empty. After that it is ignored, so it will not match Russell's PIN once he has changed it.
+- **New audit trail:** every PIN change now records **when** (`pin_changed_at`) and **which admin** did it (`pin_changed_by`) on the staff record (see it in Adminer → `staff_accounts`). If a PIN ever seems to "change by itself", this shows who changed it.
+- **Locked out of every Master Admin account?** In the TrueNAS YAML, uncomment `RESET_ADMIN_PIN` under `migrate`, set 4 digits and save (`db/04-admin-pin-reset.sql`). It is applied **once**; later redeploys with the same value do nothing, so it can't undo a PIN changed afterwards. Remove it when done.
+
 ## 6. Deletions only happen when someone actually deletes
 
 **Problem 1:** each device remembered what had been deleted on it, and kept deleting those IDs from the server forever. If assets were later **re-imported** (e.g. from the old Supabase CSV) with the same IDs, any phone that had once deleted them would quietly delete them again.

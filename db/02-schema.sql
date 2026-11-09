@@ -59,6 +59,8 @@ ALTER TABLE public.staff_accounts ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAUL
 ALTER TABLE public.staff_accounts ADD COLUMN IF NOT EXISTS permissions JSONB DEFAULT '{}'::jsonb;
 ALTER TABLE public.staff_accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE public.staff_accounts ADD COLUMN IF NOT EXISTS pin_hash TEXT;
+ALTER TABLE public.staff_accounts ADD COLUMN IF NOT EXISTS pin_changed_at TIMESTAMPTZ;
+ALTER TABLE public.staff_accounts ADD COLUMN IF NOT EXISTS pin_changed_by TEXT;
 ALTER TABLE public.staff_accounts ADD COLUMN IF NOT EXISTS failed_attempts INT DEFAULT 0;
 ALTER TABLE public.staff_accounts ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
 
@@ -316,9 +318,9 @@ END $$;
 CREATE OR REPLACE FUNCTION public.ug_upsert_staff(p_token TEXT, p_rows JSONB)
 RETURNS INT
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions AS $$
-DECLARE n INT;
+DECLARE n INT; acc public.staff_accounts;
 BEGIN
-  PERFORM public.ug_require_session(p_token, 'canManagePermissions');
+  acc := public.ug_require_session(p_token, 'canManagePermissions');
   IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_rows) r
               WHERE r ? 'pin' AND COALESCE(r->>'pin', '') !~ '^\d{4}$') THEN
     RAISE EXCEPTION 'UG_BAD_PIN' USING ERRCODE = '22023';
@@ -333,7 +335,10 @@ BEGIN
     role = EXCLUDED.role, active = EXCLUDED.active, permissions = EXCLUDED.permissions, updated_at = NOW(),
     pin_hash = COALESCE(EXCLUDED.pin_hash, a.pin_hash),
     failed_attempts = CASE WHEN EXCLUDED.pin_hash IS NULL THEN a.failed_attempts ELSE 0 END,
-    locked_until    = CASE WHEN EXCLUDED.pin_hash IS NULL THEN a.locked_until    ELSE NULL END;
+    locked_until    = CASE WHEN EXCLUDED.pin_hash IS NULL THEN a.locked_until    ELSE NULL END,
+    -- Audit trail: who last changed this PIN, and when (visible in Adminer)
+    pin_changed_at  = CASE WHEN EXCLUDED.pin_hash IS NULL THEN a.pin_changed_at  ELSE NOW() END,
+    pin_changed_by  = CASE WHEN EXCLUDED.pin_hash IS NULL THEN a.pin_changed_by  ELSE acc.name END;
   GET DIAGNOSTICS n = ROW_COUNT;
   -- New staff added without a PIN get the default 1234
   UPDATE public.staff_accounts SET pin_hash = crypt('1234', gen_salt('bf')) WHERE pin_hash IS NULL;

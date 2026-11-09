@@ -42,7 +42,10 @@ services:
     environment:
       <<: *db-env
       AUTHENTICATOR_PASSWORD: CHANGE_ME_api_password
-      INITIAL_ADMIN_PIN: "CHANGE_ME_4_digits"
+      INITIAL_ADMIN_PIN: "CHANGE_ME_4_digits"   # used ONLY on the very first install (empty database)
+      # Locked out? Uncomment, set a 4-digit PIN, save. Applied once; staff PINs are otherwise never changed by updates.
+      # RESET_ADMIN_PIN: "1234"
+      # RESET_ADMIN_NAME: "Russell Ralph"
 
   api:
     image: postgrest/postgrest:v12.2.3
